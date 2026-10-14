@@ -1,6 +1,6 @@
 
 x-app-env: &app-env
-  DATABASE_URL: postgresql+psycopg://deribit:deribit_dev@postgres:5432/deribit_prices
+  DATABASE_URL: postgresql+psycopg://deribit:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/deribit_prices
   CELERY_BROKER_URL: redis://redis:6379/0
 
 services:
@@ -9,18 +9,16 @@ services:
     environment:
       POSTGRES_DB: deribit_prices
       POSTGRES_USER: deribit
-      POSTGRES_PASSWORD: deribit_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U deribit -d deribit_prices
+      test: ["CMD-SHELL", "pg_isready -U deribit -d deribit_prices"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
   redis:
@@ -34,43 +32,76 @@ services:
       retries: 5
     restart: unless-stopped
 
+  migrate:
+    build: .
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
+
   api:
     build: .
     environment: *app-env
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
-    command: >
-      python -m uvicorn app.main:app
-      --host 0.0.0.0
-      --port 8000
+      migrate:
+        condition: service_completed_successfully
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   worker:
     build: .
     environment: *app-env
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    command: >
-      celery -A app.workers.celery_app:celery_app
-      worker --loglevel=INFO --concurrency=2
+    command:
+      - celery
+      - -A
+      - app.workers.celery_app:celery_app
+      - worker
+      - --loglevel=INFO
+      - --concurrency=2
     restart: unless-stopped
 
   beat:
     build: .
     environment: *app-env
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    command: >
-      celery -A app.workers.celery_app:celery_app
-      beat --loglevel=INFO
-      --schedule=/tmp/celerybeat-schedule
+    command:
+      - celery
+      - -A
+      - app.workers.celery_app:celery_app
+      - beat
+      - --loglevel=INFO
+      - --schedule=/tmp/celerybeat-schedule
     restart: unless-stopped
 
 volumes:
