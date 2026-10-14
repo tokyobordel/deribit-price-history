@@ -5,4 +5,4 @@ __pycache__/
 *.py[cod]
 build
 *.egg-info
-.idea
+.idea.idea
