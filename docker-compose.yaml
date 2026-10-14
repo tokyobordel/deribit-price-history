@@ -1,4 +1,8 @@
 
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://deribit:deribit_dev@postgres:5432/deribit_prices
+  CELERY_BROKER_URL: redis://redis:6379/0
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -6,13 +10,10 @@ services:
       POSTGRES_DB: deribit_prices
       POSTGRES_USER: deribit
       POSTGRES_PASSWORD: deribit_dev
-
     ports:
       - "127.0.0.1:5433:5432"
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
     healthcheck:
       test:
         - CMD-SHELL
@@ -20,7 +21,56 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: .
+    environment: *app-env
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      python -m uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+    restart: unless-stopped
+
+  worker:
+    build: .
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A app.workers.celery_app:celery_app
+      worker --loglevel=INFO --concurrency=2
+    restart: unless-stopped
+
+  beat:
+    build: .
+    environment: *app-env
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A app.workers.celery_app:celery_app
+      beat --loglevel=INFO
+      --schedule=/tmp/celerybeat-schedule
     restart: unless-stopped
 
 volumes:

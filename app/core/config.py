@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     database_url: str
     test_database_url: str | None = None
 
+    celery_broker_url: str = "redis://localhost:6380/0"
+
 
 @lru_cache
 def get_settings() -> Settings:
